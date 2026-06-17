@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+!.env.example
+.secrets.key
+files/.secrets.key
+files/.realized_pnl_state.json
+files/.daily_trade_guard_state.json
