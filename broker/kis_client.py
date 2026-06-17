@@ -59,3 +59,6 @@ class KISClient:
 
     def order_fills(self, order_id: str, market: str) -> dict[str, Any]:
         return self.api.get_order_fills_by_market(str(order_id or ""), market) or {}
+
+    def minute_candles(self, code: str, market: str, count: int = 30) -> list[dict[str, Any]]:
+        return self.api.get_intraday_minute_candles_by_market(code, market, int(count)) or []

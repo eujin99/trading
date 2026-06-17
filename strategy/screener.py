@@ -58,6 +58,25 @@ class Screener:
         raw = (range_pos * 0.55) + (body_strength * 0.25) + change_bonus + vwap_bonus - wick_penalty
         return max(0.0, min(100.0, raw))
 
+    @staticmethod
+    def _compress_candles(candles: list[dict], step: int = 3) -> list[dict]:
+        if step <= 1:
+            return candles
+        grouped = []
+        for i in range(0, len(candles), step):
+            chunk = candles[i : i + step]
+            if not chunk:
+                continue
+            grouped.append(
+                {
+                    "close": float(chunk[-1].get("close", 0)),
+                    "high": max(float(c.get("high", c.get("close", 0))) for c in chunk),
+                    "low": min(float(c.get("low", c.get("close", 0))) for c in chunk),
+                    "volume": sum(float(c.get("volume", 0)) for c in chunk),
+                }
+            )
+        return grouped
+
     def collect_candidates(self, market: str, premarket: bool = False) -> list[dict]:
         raw = self.market_data.get_candidates(market)
         result: list[dict] = []
@@ -105,6 +124,28 @@ class Screener:
                 vwap_price=vwap_price,
                 change_rate=change_rate,
             )
+            minute_candles = self.market_data.get_minute_candles(code, market, count=30)
+            if len(minute_candles) >= 6:
+                trend_1m = self.minute_data.trend_score(minute_candles[-8:])
+                trend_3m = self.minute_data.trend_score(self._compress_candles(minute_candles[-24:], step=3))
+                minute_vwap = self.minute_data.vwap(minute_candles[-20:])
+                vwap_reclaim_bonus = 8.0 if minute_vwap > 0 and price >= int(minute_vwap) else -8.0
+                highs = [float(c.get("high", c.get("close", 0))) for c in minute_candles[-8:]]
+                lows = [float(c.get("low", c.get("close", 0))) for c in minute_candles[-8:]]
+                high_break = 8.0 if highs[-1] >= max(highs[:-1]) else 0.0
+                low_higher = 8.0 if lows[-1] > min(lows[:-3]) else -6.0
+                trend_score = max(
+                    0.0,
+                    min(
+                        100.0,
+                        trend_score * 0.45
+                        + trend_1m * 0.30
+                        + trend_3m * 0.25
+                        + vwap_reclaim_bonus
+                        + high_break
+                        + low_higher,
+                    ),
+                )
             if trend_score < self.settings.min_trend_score:
                 continue
             vwap_gap = (price - vwap_price) / max(1.0, vwap_price)

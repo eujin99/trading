@@ -168,6 +168,60 @@ def get_current_price(stock_code: str) -> dict:
     return (res.json() or {}).get("output", {})
 
 
+def get_intraday_minute_candles(stock_code: str, count: int = 30) -> list[dict]:
+    """
+    국내 분봉 데이터(최근 N개) 조회.
+    실패 시 빈 리스트 반환.
+    """
+    try:
+        limit = max(5, min(120, int(count)))
+    except Exception:
+        limit = 30
+
+    try:
+        url = f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+        params = {
+            "FID_ETC_CLS_CODE": "",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": stock_code,
+            "FID_INPUT_HOUR_1": datetime.datetime.now().strftime("%H%M%S"),
+            "FID_PW_DATA_INCU_YN": "Y",
+        }
+        res = requests.get(url, headers=_headers("FHKST03010200"), params=params, timeout=10)
+        payload = res.json() or {}
+    except Exception:
+        return []
+
+    rows = payload.get("output2")
+    if not isinstance(rows, list):
+        rows = payload.get("output1")
+    if not isinstance(rows, list):
+        return []
+
+    candles = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        close = _first_nonzero_int(row.get("stck_prpr"), row.get("close"), row.get("cur_prc"))
+        high = _first_nonzero_int(row.get("stck_hgpr"), row.get("high"), close)
+        low = _first_nonzero_int(row.get("stck_lwpr"), row.get("low"), close)
+        volume = _first_nonzero_int(row.get("cntg_vol"), row.get("acml_vol"), row.get("volume"))
+        if close <= 0:
+            continue
+        candles.append(
+            {
+                "close": float(close),
+                "high": float(high if high > 0 else close),
+                "low": float(low if low > 0 else close),
+                "volume": float(max(0, volume)),
+            }
+        )
+        if len(candles) >= limit:
+            break
+
+    return list(reversed(candles))
+
+
 def get_premarket_price_snapshot(stock_code: str) -> dict:
     """
     장전(동시호가) 관찰용 스냅샷.
@@ -883,6 +937,12 @@ def get_screening_candidates(market: str) -> list:
             candidates[code] = (name, change_rate)
 
     return [{"code": c, "name": n, "change_rate": r} for c, (n, r) in candidates.items()]
+
+
+def get_intraday_minute_candles_by_market(stock_code: str, market: str, count: int = 30) -> list[dict]:
+    if market == "US":
+        return []
+    return get_intraday_minute_candles(stock_code, count=count)
 
 
 def get_available_cash_by_market(stock_code: str, price: int, market: str) -> int:
