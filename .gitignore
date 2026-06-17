@@ -7,5 +7,14 @@ __pycache__/
 !.env.example
 .secrets.key
 files/.secrets.key
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.db
+*.sqlite
+trading.db
 files/.realized_pnl_state.json
 files/.daily_trade_guard_state.json

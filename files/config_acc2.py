@@ -12,7 +12,7 @@ APP_SECRET = os.getenv("APP_SECRET_ACC2", "").strip()
 ACCOUNT_NO = os.getenv("ACCOUNT_NO_ACC2", "").strip()  # 예: 50123456-01
 
 # 모의/실전 계좌2 설정
-IS_VIRTUAL = False
+IS_VIRTUAL = os.getenv("IS_VIRTUAL_ACC2", "true").strip().lower() in {"1", "true", "y", "yes", "on"}
 if IS_VIRTUAL:
     BASE_URL = "https://openapivts.koreainvestment.com:29443"
 else:
