@@ -179,7 +179,8 @@ class Screener:
         if not candidates:
             return ranked
 
-        # 시장점수(브레드스/평균 상승률/변동성/시간대) 동적 계산
+        # 시장점수: 실제 장세 스냅샷 + 후보 기반 보정
+        snapshot = self.market_data.get_market_snapshot(market)
         avg_change = sum(float(c.get("change_rate", 0.0)) for c in candidates) / max(1, len(candidates))
         positive_ratio = sum(1 for c in candidates if float(c.get("change_rate", 0.0)) > 0) / max(1, len(candidates))
         avg_turnover = sum(float(c.get("vol_tnrt", 0.0)) for c in candidates) / max(1, len(candidates))
@@ -188,6 +189,12 @@ class Screener:
             / max(1, len(candidates))
         )
         volatility = variance**0.5
+        index_change = self._to_float(snapshot.get("index_change_rate", 0.0), 0.0)
+        index_volatility = self._to_float(snapshot.get("index_volatility", 0.0), 0.0)
+        breadth_ratio = self._to_float(snapshot.get("breadth_ratio", positive_ratio), positive_ratio)
+        strong_count = self._to_float(snapshot.get("strong_count", 0.0), 0.0)
+        turnover_score = self._to_float(snapshot.get("turnover_score", 0.0), 0.0)
+        risk_off = bool(snapshot.get("risk_off", False))
         now = dt.datetime.now().time()
         time_bonus = 0.0
         if dt.time(9, 0) <= now <= dt.time(10, 30):
@@ -197,13 +204,20 @@ class Screener:
         elif dt.time(14, 0) <= now <= dt.time(15, 0):
             time_bonus = 2.0
         base_market_score = (
-            40.0
-            + (avg_change * 2.8)
-            + (positive_ratio * 30.0)
-            + min(12.0, avg_turnover / 20.0)
-            - min(10.0, volatility * 1.4)
+            35.0
+            + (index_change * 8.0)
+            + (breadth_ratio * 28.0)
+            + min(10.0, strong_count * 0.8)
+            + min(12.0, turnover_score * 0.12)
+            + (avg_change * 2.0)
+            + (positive_ratio * 8.0)
+            + min(8.0, avg_turnover / 30.0)
+            - min(8.0, volatility * 1.0)
+            - min(8.0, index_volatility * 1.2)
             + time_bonus
         )
+        if risk_off:
+            base_market_score -= 15.0
         base_market_score = max(0.0, min(100.0, base_market_score))
 
         for c in candidates:

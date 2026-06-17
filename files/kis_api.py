@@ -297,7 +297,7 @@ def get_volume_rank() -> list:
     return (res.json() or {}).get("output", [])
 
 
-def get_fluctuation_rank() -> list:
+def _get_fluctuation_rank_range(min_rate: float, max_rate: float) -> list:
     url = f"{BASE_URL}/uapi/domestic-stock/v1/ranking/fluctuation"
     params = {
         "fid_cond_mrkt_div_code": "J",
@@ -312,11 +312,76 @@ def get_fluctuation_rank() -> list:
         "fid_trgt_cls_code": "0",
         "fid_trgt_exls_cls_code": "0",
         "fid_div_cls_code": "0",
-        "fid_rsfl_rate1": str(1.0),
-        "fid_rsfl_rate2": str(25.0),
+        "fid_rsfl_rate1": str(min_rate),
+        "fid_rsfl_rate2": str(max_rate),
     }
     res = requests.get(url, headers=_headers("FHPST01650000"), params=params, timeout=10)
     return (res.json() or {}).get("output", [])
+
+
+def get_fluctuation_rank() -> list:
+    return _get_fluctuation_rank_range(1.0, 25.0)
+
+
+def get_market_snapshot_kr() -> dict:
+    """
+    국내 장세 스냅샷:
+    - 코스닥 지수 등락률(공개 시세 fallback)
+    - 상승/하락 종목 breadth 근사치
+    - 급등 종목 수(10% 이상)
+    - 거래대금 점수 근사치
+    """
+    index_change = 0.0
+    index_volatility = 0.0
+    for symbol in ("^KQ11", "^KS11"):
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+            res = requests.get(url, params={"range": "1d", "interval": "1d"}, timeout=10)
+            payload = res.json() or {}
+            result = (((payload.get("chart") or {}).get("result") or [None])[0]) or {}
+            meta = result.get("meta") or {}
+            idx = _to_float(meta.get("regularMarketPrice", 0))
+            prev = _to_float(meta.get("previousClose", 0))
+            high = _to_float(meta.get("regularMarketDayHigh", idx))
+            low = _to_float(meta.get("regularMarketDayLow", idx))
+            if idx > 0 and prev > 0:
+                index_change = ((idx - prev) / prev) * 100.0
+                index_volatility = ((high - low) / prev) * 100.0 if high > 0 and low > 0 else 0.0
+                break
+        except Exception:
+            continue
+
+    up_rows = _get_fluctuation_rank_range(1.0, 30.0)
+    down_rows = _get_fluctuation_rank_range(-30.0, -1.0)
+    up_count = len(up_rows)
+    down_count = len(down_rows)
+    total = max(1, up_count + down_count)
+    breadth_ratio = up_count / total
+    strong_count = 0
+    for row in up_rows:
+        if _to_float(row.get("prdy_ctrt", row.get("chg_rate", 0))) >= 10.0:
+            strong_count += 1
+
+    volume_rows = get_volume_rank()[:30]
+    turnover_raw = 0
+    for row in volume_rows:
+        turnover_raw += _to_int(
+            row.get("acml_tr_pbmn", row.get("acml_tr_pbmn1", row.get("stck_avls", row.get("acml_tr_pbmn2", 0))))
+        )
+    turnover_score = min(100.0, turnover_raw / 50_000_000_000) if turnover_raw > 0 else 0.0
+    risk_off = bool(index_change <= -1.2 and breadth_ratio < 0.4)
+
+    return {
+        "market": "KR",
+        "index_change_rate": index_change,
+        "index_volatility": index_volatility,
+        "up_count": up_count,
+        "down_count": down_count,
+        "breadth_ratio": breadth_ratio,
+        "strong_count": strong_count,
+        "turnover_score": turnover_score,
+        "risk_off": risk_off,
+    }
 
 
 def get_balance() -> list:
@@ -943,6 +1008,22 @@ def get_intraday_minute_candles_by_market(stock_code: str, market: str, count: i
     if market == "US":
         return []
     return get_intraday_minute_candles(stock_code, count=count)
+
+
+def get_market_snapshot_by_market(market: str) -> dict:
+    if market == "US":
+        return {
+            "market": "US",
+            "index_change_rate": 0.0,
+            "index_volatility": 0.0,
+            "up_count": 0,
+            "down_count": 0,
+            "breadth_ratio": 0.5,
+            "strong_count": 0,
+            "turnover_score": 0.0,
+            "risk_off": False,
+        }
+    return get_market_snapshot_kr()
 
 
 def get_available_cash_by_market(stock_code: str, price: int, market: str) -> int:
