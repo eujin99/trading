@@ -156,6 +156,7 @@ class TradingApp:
         if not ok:
             return f"매도 실패: {info.get('msg1', 'unknown')}"
         self.risk.register_trade_result(int(info.get("realized_pnl", 0)))
+        self.risk.on_sell_filled(code, stop_loss=False)
         return f"{code} {qty}주 매도 완료"
 
     def command_sellall(self) -> str:
@@ -166,6 +167,7 @@ class TradingApp:
             if ok:
                 count += 1
                 self.risk.register_trade_result(int(info.get("realized_pnl", 0)))
+                self.risk.on_sell_filled(p["code"], stop_loss=False)
         return f"전량 정리 완료: {count}종목"
 
     def command_stop(self) -> str:
@@ -207,18 +209,25 @@ class TradingApp:
                     signals = self.signals.generate_buy_signals(self.market, premarket=False)
                     for s in signals:
                         total, invested, cash = self._total_asset_snapshot()
+                        existing = self.portfolio.get_position(s["code"])
+                        existing_amount = 0
+                        if existing:
+                            existing_amount = int(existing["qty"]) * int(s["price"])
                         qty = self.sizer.size_from_risk(total, self.settings.trade_risk_pct, s["price"], s["stop_price"])
                         qty = max(0, min(qty, int(self.settings.buy_max_amount // max(1, s["price"]))))
                         if qty <= 0:
                             continue
+                        order_amount = int(s["price"]) * int(qty)
                         estimated_loss = (s["price"] - s["stop_price"]) * qty
                         decision = self.risk.approve_buy(
                             code=s["code"],
                             estimated_loss=estimated_loss,
+                            order_amount=order_amount,
                             total_asset=total,
                             invested_amount=invested,
                             cash_amount=cash,
                             current_position_count=len(self.portfolio.list_positions()),
+                            current_position_amount=existing_amount,
                         )
                         if not decision.approved:
                             self.db.add_risk_event("buy_reject", "warn", decision.reason, {"code": s["code"]})
@@ -264,6 +273,7 @@ class TradingApp:
                         continue
                     realized = int(info.get("realized_pnl", 0))
                     self.risk.register_trade_result(realized)
+                    self.risk.on_sell_filled(p["code"], stop_loss=(action == "stop_loss"))
                     if action == "target1":
                         self.portfolio.mark_half_sold(p["code"])
                     self.notifier.send(f"매도 체결[{action}]: {p['name']}({p['code']}) {qty}주 @ {price} / pnl {realized:+,}")
@@ -301,6 +311,7 @@ class TradingApp:
                             ok, info = self.order_manager.submit_sell(p["market"], p["code"], int(p["qty"]), price, "market_close")
                             if ok:
                                 self.risk.register_trade_result(int(info.get("realized_pnl", 0)))
+                                self.risk.on_sell_filled(p["code"], stop_loss=False)
                         self.notifier.send("장마감 강제 정리 완료")
                         time.sleep(70)
             except Exception as e:

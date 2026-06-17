@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from config import Settings
 from data import MarketDataService, MinuteDataService
 from strategy.scoring import ScoreEngine
@@ -14,8 +16,12 @@ class Screener:
 
     def _is_risky_name(self, name: str) -> bool:
         lowered = str(name).lower()
-        filters = ["etf", "etn", "스팩", "우", "관리", "경고", "위험"]
-        return any(token in lowered for token in filters)
+        if any(token in lowered for token in ["etf", "etn", "스팩", "관리", "경고", "위험"]):
+            return True
+        # 우선주 계열만 패턴으로 제외: ..., ...우, ...우B, ...1우, ...2우B
+        if re.search(r"(우|[12]우B?|우B)$", str(name).strip()):
+            return True
+        return False
 
     def collect_candidates(self, market: str, premarket: bool = False) -> list[dict]:
         raw = self.market_data.get_candidates(market)

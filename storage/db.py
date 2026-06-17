@@ -115,6 +115,16 @@ class Database:
                     value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS daily_symbol_guard (
+                    trade_date TEXT NOT NULL,
+                    code TEXT NOT NULL,
+                    buy_count INTEGER NOT NULL DEFAULT 0,
+                    sell_count INTEGER NOT NULL DEFAULT 0,
+                    stopped_out INTEGER NOT NULL DEFAULT 0,
+                    last_trade_time TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (trade_date, code)
+                );
                 """
             )
 
@@ -327,3 +337,65 @@ class Database:
         with self._lock, self.connect() as conn:
             row = conn.execute("SELECT value FROM strategy_params WHERE key=?", (key,)).fetchone()
         return str(row["value"]) if row else default
+
+    def get_symbol_guard(self, trade_date: str, code: str) -> dict[str, Any]:
+        with self._lock, self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT trade_date, code, buy_count, sell_count, stopped_out, last_trade_time
+                FROM daily_symbol_guard
+                WHERE trade_date=? AND code=?
+                """,
+                (trade_date, code),
+            ).fetchone()
+            if row:
+                return dict(row)
+            now = datetime.now().isoformat()
+            conn.execute(
+                """
+                INSERT INTO daily_symbol_guard
+                (trade_date, code, buy_count, sell_count, stopped_out, last_trade_time)
+                VALUES (?, ?, 0, 0, 0, ?)
+                """,
+                (trade_date, code, now),
+            )
+            return {
+                "trade_date": trade_date,
+                "code": code,
+                "buy_count": 0,
+                "sell_count": 0,
+                "stopped_out": 0,
+                "last_trade_time": now,
+            }
+
+    def update_symbol_guard(
+        self,
+        trade_date: str,
+        code: str,
+        buy_count: int,
+        sell_count: int,
+        stopped_out: int,
+        last_trade_time: str | None = None,
+    ) -> None:
+        updated = last_trade_time or datetime.now().isoformat()
+        with self._lock, self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO daily_symbol_guard
+                (trade_date, code, buy_count, sell_count, stopped_out, last_trade_time)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_date, code) DO UPDATE SET
+                    buy_count=excluded.buy_count,
+                    sell_count=excluded.sell_count,
+                    stopped_out=excluded.stopped_out,
+                    last_trade_time=excluded.last_trade_time
+                """,
+                (
+                    trade_date,
+                    code,
+                    int(buy_count),
+                    int(sell_count),
+                    int(stopped_out),
+                    updated,
+                ),
+            )

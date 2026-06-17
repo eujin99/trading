@@ -20,7 +20,6 @@ class RiskManager:
         self.settings = settings
         self.db = db
         self.breaker = breaker
-        self._today_reentry: dict[str, int] = {}
 
     def _trade_date(self) -> str:
         return datetime.now().strftime("%Y-%m-%d")
@@ -49,10 +48,12 @@ class RiskManager:
         self,
         code: str,
         estimated_loss: int,
+        order_amount: int,
         total_asset: int,
         invested_amount: int,
         cash_amount: int,
         current_position_count: int,
+        current_position_amount: int = 0,
     ) -> RiskDecision:
         allowed, reason = self.breaker.can_open_new_position()
         if not allowed:
@@ -70,17 +71,26 @@ class RiskManager:
         if current_position_count >= self.settings.max_stocks:
             return RiskDecision(False, "최대 동시 보유 종목 수 초과")
 
-        today_key = f"{self._trade_date()}::{code}"
-        if self._today_reentry.get(today_key, 0) >= self.settings.reentry_per_day:
+        guard = self.db.get_symbol_guard(self._trade_date(), code)
+        if int(guard.get("stopped_out", 0)) > 0:
+            return RiskDecision(False, "당일 손절 종목 재진입 금지")
+        if int(guard.get("buy_count", 0)) >= self.settings.reentry_per_day:
             return RiskDecision(False, "동일 종목 재진입 제한")
 
-        cash_ratio = (cash_amount / total_asset) if total_asset > 0 else 0.0
-        if cash_ratio < self.settings.min_cash_pct:
-            return RiskDecision(False, "현금 비중 하한 미달")
+        post_cash = cash_amount - max(0, int(order_amount))
+        post_invested = invested_amount + max(0, int(order_amount))
+        post_position = current_position_amount + max(0, int(order_amount))
+        post_cash_ratio = (post_cash / total_asset) if total_asset > 0 else 0.0
+        if post_cash_ratio < self.settings.min_cash_pct:
+            return RiskDecision(False, "매수 후 현금 비중 하한 미달")
 
-        invest_ratio = (invested_amount / total_asset) if total_asset > 0 else 1.0
-        if invest_ratio > self.settings.max_total_invest_pct:
-            return RiskDecision(False, "총 투자 비중 상한 초과")
+        post_invest_ratio = (post_invested / total_asset) if total_asset > 0 else 1.0
+        if post_invest_ratio > self.settings.max_total_invest_pct:
+            return RiskDecision(False, "매수 후 총 투자 비중 상한 초과")
+
+        post_position_ratio = (post_position / total_asset) if total_asset > 0 else 1.0
+        if post_position_ratio > self.settings.max_position_pct:
+            return RiskDecision(False, "종목당 최대 비중 상한 초과")
 
         max_loss_per_trade = int(total_asset * self.settings.trade_risk_pct)
         if estimated_loss > max_loss_per_trade:
@@ -89,5 +99,21 @@ class RiskManager:
         return RiskDecision(True, "")
 
     def on_buy_filled(self, code: str) -> None:
-        today_key = f"{self._trade_date()}::{code}"
-        self._today_reentry[today_key] = self._today_reentry.get(today_key, 0) + 1
+        guard = self.db.get_symbol_guard(self._trade_date(), code)
+        self.db.update_symbol_guard(
+            trade_date=self._trade_date(),
+            code=code,
+            buy_count=int(guard.get("buy_count", 0)) + 1,
+            sell_count=int(guard.get("sell_count", 0)),
+            stopped_out=int(guard.get("stopped_out", 0)),
+        )
+
+    def on_sell_filled(self, code: str, stop_loss: bool = False) -> None:
+        guard = self.db.get_symbol_guard(self._trade_date(), code)
+        self.db.update_symbol_guard(
+            trade_date=self._trade_date(),
+            code=code,
+            buy_count=int(guard.get("buy_count", 0)),
+            sell_count=int(guard.get("sell_count", 0)) + 1,
+            stopped_out=1 if stop_loss else int(guard.get("stopped_out", 0)),
+        )

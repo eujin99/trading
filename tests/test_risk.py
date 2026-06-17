@@ -33,5 +33,14 @@ def test_daily_trade_limit_blocks(tmp_path):
     br = CircuitBreaker(api_error_limit=3, order_fail_limit=2)
     rm = RiskManager(s, db, br)
     rm.register_trade_result(1000)
-    dec = rm.approve_buy("005930", 1000, 10_000_000, 1_000_000, 9_000_000, 0)
+    dec = rm.approve_buy(
+        code="005930",
+        estimated_loss=1000,
+        order_amount=100_000,
+        total_asset=10_000_000,
+        invested_amount=1_000_000,
+        cash_amount=9_000_000,
+        current_position_count=0,
+        current_position_amount=0,
+    )
     assert not dec.approved
