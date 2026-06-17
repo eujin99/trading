@@ -110,7 +110,18 @@ class Screener:
 
     def rank(self, market: str, premarket: bool = False) -> list[dict]:
         ranked: list[dict] = []
-        for c in self.collect_candidates(market, premarket=premarket):
+        candidates = self.collect_candidates(market, premarket=premarket)
+        if not candidates:
+            return ranked
+
+        # 시장점수(브레드스/평균 상승률 기반) 동적 계산
+        avg_change = sum(float(c.get("change_rate", 0.0)) for c in candidates) / max(1, len(candidates))
+        positive_ratio = sum(1 for c in candidates if float(c.get("change_rate", 0.0)) > 0) / max(1, len(candidates))
+        base_market_score = max(0.0, min(100.0, 45.0 + avg_change * 3.0 + positive_ratio * 35.0))
+
+        for c in candidates:
+            own_change = float(c.get("change_rate", 0.0))
+            market_score = max(0.0, min(100.0, base_market_score + own_change * 1.2))
             price = c["price"]
             stop = int(round(price * (1 - self.settings.stop_loss_rate)))
             target = int(round(price * (1 + self.settings.target_rate_2)))
@@ -123,7 +134,7 @@ class Screener:
                 trading_value=c["trading_value"],
                 vwap_gap=c.get("vwap_gap", 0.0),
                 spread_pct=c.get("spread_pct", 0.3),
-                market_score=c.get("market_score", 60),
+                market_score=market_score,
                 rr_ratio=rr_ratio,
                 trend_score=c.get("trend_score", 65),
                 intensity=min(100, c["vol_tnrt"] / 3),

@@ -16,5 +16,6 @@ files/.secrets.key
 *.db
 *.sqlite
 trading.db
+.pytest_cache/
 files/.realized_pnl_state.json
 files/.daily_trade_guard_state.json

@@ -47,7 +47,16 @@ class TradingApp:
         self.screener = Screener(self.settings, self.market_data)
         self.signals = SignalEngine(self.settings, self.db, self.screener)
         self.exit_engine = ExitEngine(self.settings)
-        self.order_manager = OrderManager(self.client, self.db, self.portfolio, self.breaker)
+        self.order_manager = OrderManager(
+            self.client,
+            self.db,
+            self.portfolio,
+            self.breaker,
+            fee_rate=self.settings.fee_rate,
+            sell_tax_rate=self.settings.sell_tax_rate,
+            partial_retry_max=self.settings.partial_retry_max,
+            partial_retry_sleep_sec=self.settings.partial_retry_sleep_sec,
+        )
         self.account_sync = AccountSyncService(self.client, self.portfolio, self.db)
         self.notifier = TelegramNotifier(self.settings)
         self.sizer = PositionSizer()
