@@ -23,6 +23,20 @@ class Screener:
             return True
         return False
 
+    @staticmethod
+    def _to_int(value, default: int = 0) -> int:
+        try:
+            return int(float(str(value).replace(",", "").strip()))
+        except Exception:
+            return default
+
+    @staticmethod
+    def _to_float(value, default: float = 0.0) -> float:
+        try:
+            return float(str(value).replace(",", "").strip())
+        except Exception:
+            return default
+
     def collect_candidates(self, market: str, premarket: bool = False) -> list[dict]:
         raw = self.market_data.get_candidates(market)
         result: list[dict] = []
@@ -34,15 +48,49 @@ class Screener:
             if self._is_risky_name(name):
                 continue
             detail = self.market_data.get_price_detail(code, market, premarket=premarket)
-            price = int(float(detail.get("stck_prpr", 0) or 0))
+            price = self._to_int(detail.get("stck_prpr", 0))
             if price <= 0:
                 continue
-            change_rate = float(detail.get("prdy_ctrt", item.get("change_rate", 0)) or 0)
-            vol_tnrt = float(detail.get("vol_tnrt", 0) or 0)
-            acml_vol = float(detail.get("acml_vol", 0) or 0)
+            change_rate = self._to_float(detail.get("prdy_ctrt", item.get("change_rate", 0)))
+            vol_tnrt = self._to_float(detail.get("vol_tnrt", 0))
+            acml_vol = self._to_float(detail.get("acml_vol", 0))
             trading_value = price * acml_vol
             if trading_value < 500_000_000:
                 continue
+
+            bid1 = self._to_int(detail.get("bidp1", detail.get("stck_bdp1", 0)))
+            ask1 = self._to_int(detail.get("askp1", detail.get("stck_askp1", 0)))
+            aspr_unit = self._to_int(detail.get("aspr_unit", 0))
+            if bid1 > 0 and ask1 > 0 and ask1 >= bid1:
+                spread_pct = ((ask1 - bid1) / max(1, price)) * 100.0
+            elif aspr_unit > 0:
+                spread_pct = (aspr_unit / max(1, price)) * 100.0
+            else:
+                spread_pct = 0.2
+            if spread_pct > self.settings.max_spread_pct:
+                continue
+
+            open_price = self._to_int(detail.get("stck_oprc", price), price)
+            high_price = self._to_int(detail.get("stck_hgpr", price), price)
+            low_price = self._to_int(detail.get("stck_lwpr", price), price)
+            day_range = max(1, high_price - low_price)
+            range_pos = ((price - low_price) / day_range) * 100.0
+            trend_score = max(0.0, min(100.0, range_pos if price >= open_price else range_pos * 0.6))
+            if trend_score < self.settings.min_trend_score:
+                continue
+
+            vwap_price = self._to_float(detail.get("wghn_avrg_stck_prc", 0.0), 0.0)
+            if vwap_price <= 0:
+                vwap_price = float(open_price)
+            vwap_gap = (price - vwap_price) / max(1.0, vwap_price)
+            if self.settings.require_price_above_vwap and vwap_gap < 0:
+                continue
+
+            prev_close = price / max(0.01, (1.0 + (change_rate / 100.0)))
+            gap_up_pct = ((open_price - prev_close) / max(1.0, prev_close)) * 100.0
+            if gap_up_pct > self.settings.max_gap_up_pct:
+                continue
+
             result.append(
                 {
                     "code": code,
@@ -51,6 +99,10 @@ class Screener:
                     "change_rate": change_rate,
                     "vol_tnrt": vol_tnrt,
                     "trading_value": trading_value,
+                    "spread_pct": spread_pct,
+                    "trend_score": trend_score,
+                    "vwap_gap": vwap_gap,
+                    "market_score": 60.0,
                     "detail": detail,
                 }
             )
@@ -69,11 +121,11 @@ class Screener:
                 change_rate=c["change_rate"],
                 vol_tnrt=c["vol_tnrt"],
                 trading_value=c["trading_value"],
-                vwap_gap=0.2,
-                spread_pct=0.3,
-                market_score=60,
+                vwap_gap=c.get("vwap_gap", 0.0),
+                spread_pct=c.get("spread_pct", 0.3),
+                market_score=c.get("market_score", 60),
                 rr_ratio=rr_ratio,
-                trend_score=65,
+                trend_score=c.get("trend_score", 65),
                 intensity=min(100, c["vol_tnrt"] / 3),
             )
             scored = {

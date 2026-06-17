@@ -454,6 +454,128 @@ def get_today_realized_pnl_kr() -> int:
     return 0
 
 
+def get_order_fills_kr(order_no: str) -> dict:
+    """
+    국내 주문번호 기준 당일 체결 내역 조회.
+    반환값:
+      {
+        "order_no": str,
+        "filled_qty": int,
+        "ordered_qty": int,
+        "remaining_qty": int,
+        "avg_fill_price": int,
+        "status": "none" | "partial" | "filled",
+      }
+    """
+    odno = str(order_no or "").strip()
+    if not odno:
+        return {
+            "order_no": "",
+            "filled_qty": 0,
+            "ordered_qty": 0,
+            "remaining_qty": 0,
+            "avg_fill_price": 0,
+            "status": "none",
+        }
+
+    url = f"{BASE_URL}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+    acc_no, acc_prod = _parse_account_no()
+    today = datetime.datetime.now().strftime("%Y%m%d")
+    tr_candidates = ["VTTC0081R", "VTTC8001R"] if IS_VIRTUAL else ["TTTC0081R", "TTTC8001R"]
+    params = {
+        "CANO": acc_no,
+        "ACNT_PRDT_CD": acc_prod,
+        "INQR_STRT_DT": today,
+        "INQR_END_DT": today,
+        "SLL_BUY_DVSN_CD": "00",
+        "INQR_DVSN": "00",
+        "PDNO": "",
+        "CCLD_DVSN": "00",
+        "ORD_GNO_BRNO": "",
+        "ODNO": odno,
+        "INQR_DVSN_3": "00",
+        "INQR_DVSN_1": "",
+        "CTX_AREA_FK100": "",
+        "CTX_AREA_NK100": "",
+    }
+
+    for tr_id in tr_candidates:
+        try:
+            res = requests.get(url, headers=_headers(tr_id), params=params, timeout=10)
+            payload = res.json() or {}
+        except Exception:
+            continue
+        rows = payload.get("output1")
+        if not isinstance(rows, list):
+            continue
+
+        filtered = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_odno = str(row.get("odno", row.get("ODNO", ""))).strip()
+            if row_odno and row_odno != odno:
+                continue
+            filtered.append(row)
+        if not filtered:
+            continue
+
+        ordered_qty = 0
+        filled_qty = 0
+        remaining_qty = 0
+        fill_amt = 0
+        for row in filtered:
+            ordered_qty = max(
+                ordered_qty,
+                _to_int(row.get("ord_qty", row.get("tot_ord_qty", row.get("ord_tmd_qty", 0)))),
+            )
+            row_filled = _to_int(row.get("tot_ccld_qty", row.get("ccld_qty", 0)))
+            filled_qty = max(filled_qty, row_filled)
+            row_remaining = _to_int(
+                row.get("rmn_qty", row.get("ord_psbl_qty", row.get("nccs_qty", 0)))
+            )
+            remaining_qty = max(remaining_qty, row_remaining)
+            row_amt = _to_int(row.get("tot_ccld_amt", row.get("ccld_amt", row.get("sttl_amt", 0))))
+            fill_amt = max(fill_amt, row_amt)
+
+        if ordered_qty <= 0 and filled_qty > 0:
+            ordered_qty = filled_qty + remaining_qty
+
+        avg_fill_price = 0
+        if filled_qty > 0 and fill_amt > 0:
+            avg_fill_price = int(fill_amt / max(1, filled_qty))
+        if avg_fill_price <= 0:
+            for row in filtered:
+                avg_fill_price = _to_int(row.get("avg_prvs", row.get("ccld_unpr", row.get("ord_unpr", 0))))
+                if avg_fill_price > 0:
+                    break
+
+        if filled_qty <= 0:
+            status = "none"
+        elif ordered_qty > 0 and filled_qty >= ordered_qty and remaining_qty == 0:
+            status = "filled"
+        else:
+            status = "partial"
+
+        return {
+            "order_no": odno,
+            "filled_qty": int(filled_qty),
+            "ordered_qty": int(ordered_qty),
+            "remaining_qty": int(remaining_qty),
+            "avg_fill_price": int(avg_fill_price),
+            "status": status,
+        }
+
+    return {
+        "order_no": odno,
+        "filled_qty": 0,
+        "ordered_qty": 0,
+        "remaining_qty": 0,
+        "avg_fill_price": 0,
+        "status": "none",
+    }
+
+
 # ===== 해외 =====
 
 def get_us_current_price(stock_code: str, exchange: str = US_EXCHANGE) -> dict:
@@ -786,3 +908,16 @@ def get_today_realized_pnl_by_market(market: str) -> int:
         # 현재 코드베이스는 국내 계좌 기준 브리핑/손익 로직 중심
         return 0
     return get_today_realized_pnl_kr()
+
+
+def get_order_fills_by_market(order_no: str, market: str) -> dict:
+    if market == "US":
+        return {
+            "order_no": str(order_no or ""),
+            "filled_qty": 0,
+            "ordered_qty": 0,
+            "remaining_qty": 0,
+            "avg_fill_price": 0,
+            "status": "none",
+        }
+    return get_order_fills_kr(order_no)

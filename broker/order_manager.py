@@ -73,6 +73,55 @@ class OrderManager:
             time.sleep(0.7)
         return False
 
+    def _fetch_fill_snapshot(
+        self,
+        market: str,
+        order_id: str,
+        code: str,
+        prev_qty: int,
+        ordered_qty: int,
+        side: str,
+        attempts: int = 4,
+    ) -> dict[str, int | str]:
+        """
+        체결조회 API를 우선 사용하고, 조회 불가 시 잔고 수량 변화로 fallback 한다.
+        """
+        order_id = str(order_id or "").strip()
+        for _ in range(max(1, attempts)):
+            if order_id:
+                info = self.client.order_fills(order_id, market)
+                filled = int(info.get("filled_qty", 0) or 0)
+                ordered = int(info.get("ordered_qty", ordered_qty) or ordered_qty)
+                avg = int(info.get("avg_fill_price", 0) or 0)
+                status = str(info.get("status", "")).strip().lower()
+                if filled > 0:
+                    if ordered > 0 and filled >= ordered and status in {"filled", "partial", ""}:
+                        status = "filled"
+                    elif status not in {"filled", "partial"}:
+                        status = "partial"
+                    return {
+                        "filled_qty": min(max(0, filled), max(0, ordered_qty)),
+                        "ordered_qty": max(0, ordered if ordered > 0 else ordered_qty),
+                        "avg_fill_price": max(0, avg),
+                        "status": status,
+                    }
+            time.sleep(0.7)
+
+        current = self._balance_qty(market, code)
+        if side == "BUY":
+            filled = max(0, current - prev_qty)
+        else:
+            filled = max(0, prev_qty - current)
+        if filled <= 0:
+            return {"filled_qty": 0, "ordered_qty": max(0, ordered_qty), "avg_fill_price": 0, "status": "none"}
+        status = "filled" if filled >= max(0, ordered_qty) else "partial"
+        return {
+            "filled_qty": min(filled, max(0, ordered_qty)),
+            "ordered_qty": max(0, ordered_qty),
+            "avg_fill_price": 0,
+            "status": status,
+        }
+
     def submit_buy(self, market: str, code: str, name: str, qty: int, price: int, retry: int = 2) -> tuple[bool, dict]:
         last = {}
         prev_qty = self._balance_qty(market, code)
@@ -94,24 +143,42 @@ class OrderManager:
                 }
             )
             if ok:
-                if self._confirm_buy_fill(market, code, prev_qty, qty):
+                fill = self._fetch_fill_snapshot(
+                    market=market,
+                    order_id=order_id,
+                    code=code,
+                    prev_qty=prev_qty,
+                    ordered_qty=qty,
+                    side="BUY",
+                )
+                filled_qty = int(fill.get("filled_qty", 0) or 0)
+                if filled_qty <= 0:
+                    self.db.update_order_status(order_id, "accepted", {"response": last, "msg": "fill_not_confirmed"})
+                    return False, {"msg1": "주문 접수됨(체결 미확인)", "response": last}
+
+                fill_price = int(fill.get("avg_fill_price", 0) or 0)
+                if fill_price <= 0:
                     fill_price = self._extract_fill_price(last, price)
-                    self.db.update_order_status(order_id, "filled", last)
-                    self.breaker.record_success()
-                    self.portfolio.upsert_position(code, name, qty, fill_price, market)
-                    self.db.add_trade(
-                        {
-                            "order_id": order_id,
-                            "market": market,
-                            "code": code,
-                            "side": "BUY",
-                            "qty": qty,
-                            "fill_price": fill_price,
-                        }
-                    )
-                    return True, last
-                self.db.update_order_status(order_id, "accepted", {"response": last, "msg": "fill_not_confirmed"})
-                return False, {"msg1": "주문 접수됨(체결 미확인)", "response": last}
+                is_full = filled_qty >= int(qty)
+                self.db.update_order_status(order_id, "filled" if is_full else "partial_filled", last)
+                self.breaker.record_success()
+                self.portfolio.upsert_position(code, name, filled_qty, fill_price, market)
+                self.db.add_trade(
+                    {
+                        "order_id": order_id,
+                        "market": market,
+                        "code": code,
+                        "side": "BUY",
+                        "qty": filled_qty,
+                        "fill_price": fill_price,
+                    }
+                )
+                return True, {
+                    "response": last,
+                    "filled_qty": filled_qty,
+                    "fill_price": fill_price,
+                    "partial": not is_full,
+                }
             self.breaker.record_order_failure(last.get("msg1", "buy failed"))
         return False, last
 
@@ -136,28 +203,47 @@ class OrderManager:
                 }
             )
             if ok:
-                if self._confirm_sell_fill(market, code, prev_qty, qty):
+                fill = self._fetch_fill_snapshot(
+                    market=market,
+                    order_id=order_id,
+                    code=code,
+                    prev_qty=prev_qty,
+                    ordered_qty=qty,
+                    side="SELL",
+                )
+                filled_qty = int(fill.get("filled_qty", 0) or 0)
+                if filled_qty <= 0:
+                    self.db.update_order_status(order_id, "accepted", {"response": last, "msg": "fill_not_confirmed"})
+                    return False, {"msg1": "주문 접수됨(체결 미확인)", "response": last}
+
+                fill_price = int(fill.get("avg_fill_price", 0) or 0)
+                if fill_price <= 0:
                     fill_price = self._extract_fill_price(last, price)
-                    self.db.update_order_status(order_id, "filled", last)
-                    self.breaker.record_success()
-                    pos = self.portfolio.get_position(code)
-                    avg = int(pos["avg_price"]) if pos else fill_price
-                    realized = (fill_price - avg) * qty
-                    self.portfolio.reduce_position(code, qty)
-                    self.db.add_trade(
-                        {
-                            "order_id": order_id,
-                            "market": market,
-                            "code": code,
-                            "side": "SELL",
-                            "qty": qty,
-                            "fill_price": fill_price,
-                            "realized_pnl": realized,
-                            "slippage": max(0, int(price) - int(fill_price)),
-                        }
-                    )
-                    return True, {"response": last, "realized_pnl": realized, "fill_price": fill_price}
-                self.db.update_order_status(order_id, "accepted", {"response": last, "msg": "fill_not_confirmed"})
-                return False, {"msg1": "주문 접수됨(체결 미확인)", "response": last}
+                is_full = filled_qty >= int(qty)
+                self.db.update_order_status(order_id, "filled" if is_full else "partial_filled", last)
+                self.breaker.record_success()
+                pos = self.portfolio.get_position(code)
+                avg = int(pos["avg_price"]) if pos else fill_price
+                realized = (fill_price - avg) * filled_qty
+                self.portfolio.reduce_position(code, filled_qty)
+                self.db.add_trade(
+                    {
+                        "order_id": order_id,
+                        "market": market,
+                        "code": code,
+                        "side": "SELL",
+                        "qty": filled_qty,
+                        "fill_price": fill_price,
+                        "realized_pnl": realized,
+                        "slippage": max(0, int(price) - int(fill_price)),
+                    }
+                )
+                return True, {
+                    "response": last,
+                    "realized_pnl": realized,
+                    "fill_price": fill_price,
+                    "filled_qty": filled_qty,
+                    "partial": not is_full,
+                }
             self.breaker.record_order_failure(last.get("msg1", "sell failed"))
         return False, last

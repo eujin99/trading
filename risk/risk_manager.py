@@ -27,6 +27,25 @@ class RiskManager:
     def _daily_state(self) -> dict[str, Any]:
         return self.db.get_daily_pnl(self._trade_date())
 
+    def buy_risk_multiplier(self, total_asset: int) -> float:
+        """
+        손실 누적 시 신규 진입 수량을 자동 축소한다.
+        - 연속 손실 1회 이상: LOSS_STREAK_RISK_MULTIPLIER 적용
+        - 일일 손실의 50% 이상 도달: DAILY_DRAWDOWN_RISK_MULTIPLIER 적용
+        """
+        day = self._daily_state()
+        multiplier = 1.0
+
+        if int(day.get("loss_streak", 0)) >= 1:
+            multiplier *= max(0.1, float(self.settings.loss_streak_risk_multiplier))
+
+        if total_asset > 0:
+            drawdown_trigger = -int(total_asset * self.settings.daily_max_loss_pct * 0.5)
+            if int(day.get("realized_pnl", 0)) <= drawdown_trigger:
+                multiplier *= max(0.1, float(self.settings.daily_drawdown_risk_multiplier))
+
+        return max(0.1, min(1.0, multiplier))
+
     def register_pause(self, reason: str) -> None:
         self.breaker.pause(reason)
         self.db.add_risk_event("pause", "high", reason, {})

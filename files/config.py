@@ -1,22 +1,14 @@
 # ============================================================
-# config.py — 설정 파일 (APP KEY / SECRET 여기에 입력)
+# config.py — 환경변수 기반 설정 파일
 # ============================================================
 
-from secret_crypto import resolve_secret
+import os
 
-# ★ 민감정보는 ENC(...) 암호문 + TRADING_MASTER_KEY 조합으로 복호화됩니다.
-APP_KEY = resolve_secret(
-    "APP_KEY",
-    "ENC(v1.oY42LICZ6WKe4SRyYDNwEA.D_XZhLg-ZBoKfJsmQqJb1Q.khkmCi0_zDWn4mDAQZ8__NgTNSqpKCpuwDI0VMk_NfL8rnha.j5kL69IzxQ9GAQTSTqQK-jzWlz-0ZE8rqZbOAGl6zjk)",
-)
-APP_SECRET = resolve_secret(
-    "APP_SECRET",
-    "ENC(v1.dYuVqyuSi6EEpD0M6ywbPg.sN-1liFi0bGzQjwu_UaUgA.m7QMq92f4uxSbsmSXhS5Fh8LvBmJ1BfZ3unQHGRf2d8W8fXInUaH2aCkOtcAI5lYqirSkg6jJw4j7z2SdFcr3fi1IKZxwsyOr6_NgfuVbb00l17_N0NMAv7jKruDncEd2U--Rg0NPNuagLo_TJcXlqG5uE7F0LAIpbIQlpnAmzYHMIm1nfNUNGkgzSFDFZPOMqm8g2gORrT-ayJYLkfAYJLel3F2uohH6J09ZcY04T64kYCY.jTfGnkufNSwbmrKJWnN9duGyItIADKCjP4lg6dgI5vo)",
-)
-ACCOUNT_NO = resolve_secret(
-    "ACCOUNT_NO",
-    "ENC(v1.EboemOZBhJ3ZZ2idoGaCNw.VEymh3ARo0ndLCRC2okJMA.ZEnK6YmgpLTSFWk.tnC1gAmg7141x3luSbH0saQLOqlWIEgCf9MwymgOacQ)",
-)  # 예: 50123456-01
+
+# 민감정보는 코드에 넣지 않고 환경변수로만 주입한다.
+APP_KEY = os.getenv("APP_KEY", "").strip()
+APP_SECRET = os.getenv("APP_SECRET", "").strip()
+ACCOUNT_NO = os.getenv("ACCOUNT_NO", "").strip()  # 예: 50123456-01
 
 # 모의투자 = True / 실전투자 = False
 IS_VIRTUAL = True
@@ -28,12 +20,12 @@ else:
     BASE_URL = "https://openapi.koreainvestment.com:9443"
 
 # ── 매매 파라미터 ──────────────────────────────────────────
-MAX_STOCKS        = 6        # 동시 보유 최대 종목 수 (공격형)
-BUY_PCT           = 0.15     # 종목당 매수 비율 (가용 현금의 15%)
+MAX_STOCKS        = 3        # 동시 보유 최대 종목 수
+BUY_PCT           = 0.05     # 종목당 매수 비율 (보수적)
 BUY_MIN_AMOUNT    = 300000   # 종목당 최소 매수 금액 (원)
 BUY_MAX_AMOUNT    = 1500000  # 종목당 최대 매수 금액 (원)
-MIN_CASH_RATIO    = 0.10     # 최소 현금 비중 (10% 이상 유지, 공격형)
-ADD_ON_ENABLED    = True     # 보유 종목 추가매수(피라미딩) 허용
+MIN_CASH_RATIO    = 0.35     # 최소 현금 비중 (35% 이상 유지)
+ADD_ON_ENABLED    = False    # 손실 구간 물타기 금지
 ADD_ON_MIN_SCORE  = 38       # 추가매수 최소 점수
 ADD_ON_MAX_PER_STOCK = 2     # 종목당 추가매수 최대 횟수
 ADD_ON_COOLDOWN_SEC = 600    # 추가매수 최소 간격(초)
@@ -51,7 +43,7 @@ STOP_BREACH_CONFIRM_COUNT = 2  # 손절가 연속 하회 확인 횟수
 VOLUME_RATIO_MIN  = 1.5      # 거래량 배율 최소 기준 (20일 평균 대비)
 CHANGE_RATE_MIN   = 1.0      # 최소 등락률 (%)
 CHANGE_RATE_MAX   = 25.0     # 최대 등락률 (상한가 근처 제외, %)
-SCORE_THRESHOLD   = 32       # 매수 진입 최소 점수
+SCORE_THRESHOLD   = 55       # 매수 진입 최소 점수 (공격형 실험 모드)
 
 # ── 공격형 스크리닝 필터 ───────────────────────────────────
 AGGRESSIVE_SCREENING = False         # 기본(초기) 스코어링 방식 사용
@@ -80,15 +72,9 @@ US_UNIVERSE       = [
 SELL_ON_INTERRUPT = False    # Ctrl+C 종료 시 전량 강제매도 여부
 TELEGRAM_NOTIFY_ENABLED = True     # OpenClaw 텔레그램 상태 알림 사용
 TELEGRAM_NOTIFY_INTERVAL_SEC = 300  # 보유종목 상태 알림 주기(초, 5분)
-TELEGRAM_BOT_TOKEN = resolve_secret(
-    "TELEGRAM_BOT_TOKEN",
-    "ENC(v1.j5pN7GnjW7woXWU9arpnWA.tUXEOnIQp_BRc0rqBUMn2Q.ia5TIgWxnaibcpc8r8qjeyeMA36gwrEdxLe32JFFVfYwZkhs0A53Q95ttkdvJQ.gCtC5RJjdeZaxJZpOl-gVPSlIbLsZdYSfCXKrp7bnaA)",
-)  # BotFather에서 발급받은 봇 토큰
-TELEGRAM_CHAT_ID = resolve_secret(
-    "TELEGRAM_CHAT_ID",
-    "ENC(v1.4_hzmwOorQv4Da2J4QbXsA.5l5YcaUggbhkqPXXTnHK4g.hFtoYPRRoHHBbg.ixOcrQRHab_22rBD8-F2Q3upZR6Ma2iEvYPhrGtWxn0)",
-)  # 내 개인 chat_id (숫자)
-AUTO_SCREEN_INTERVAL_SEC = 5                 # 자동 스크리닝 주기(초)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()  # BotFather에서 발급받은 봇 토큰
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()  # 내 개인 chat_id (숫자)
+AUTO_SCREEN_INTERVAL_SEC = 15                # 자동 스크리닝 주기(초)
 PORTFOLIO_SCORE_INTERVAL_SEC = 3             # 메뉴 1 보유종목 실시간 점수 출력 주기(초)
 PRICE_CACHE_TTL_SEC = 2                      # 시세 캐시 유지 시간(초)
 SCREENING_SOURCE_LIMIT = 300                 # 스크리닝 원천 후보 수집 개수(거래량/등락률 각각)
@@ -102,3 +88,24 @@ PREMARKET_START = "08:00"                    # 장전 관찰 스크리닝 시작
 MARKET_OPEN       = "09:00"
 SCREENING_TIME    = "09:05"  # 스크리닝 시작 시각
 FORCE_SELL_TIME   = "15:20"  # 장 마감 전 강제 청산 시각
+
+# ── 계좌 단위 리스크 제한(v2) ───────────────────────────────
+DAILY_MAX_LOSS_PCT = 0.015           # 일일 최대 손실 -1.5%
+TRADE_RISK_PCT = 0.005               # 1회 거래 최대 손실 0.5%
+MAX_DAILY_TRADES = 5                 # 일일 거래 횟수 제한
+MAX_CONSECUTIVE_LOSSES = 2           # 연속 손실 제한
+MAX_POSITION_PCT = 0.15              # 종목당 최대 비중
+MAX_TOTAL_INVEST_PCT = 0.65          # 총 투자 비중 상한
+REENTRY_PER_DAY = 1                  # 동일 종목 재진입 제한
+API_ERROR_LIMIT = 3                  # API 오류 누적 제한
+ORDER_FAIL_LIMIT = 2                 # 주문 실패 누적 제한
+
+# ── 스크리닝 하드필터(v2) ─────────────────────────────────
+MAX_SPREAD_PCT = 0.8                 # 스프레드 상한(%)
+MIN_TREND_SCORE = 55.0               # 분봉 추세 최소 점수
+MAX_GAP_UP_PCT = 8.0                 # 갭상승 상한(%)
+REQUIRE_PRICE_ABOVE_VWAP = True      # VWAP 상회 종목만 허용
+
+# ── 손실 누적 시 비중 축소(v2) ─────────────────────────────
+LOSS_STREAK_RISK_MULTIPLIER = 0.7    # 연속손실 시 리스크 축소 배수
+DAILY_DRAWDOWN_RISK_MULTIPLIER = 0.5 # 일일 손실 누적 시 리스크 축소 배수

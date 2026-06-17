@@ -54,6 +54,8 @@ class TradingApp:
         self.market = self.settings.default_market
         self.stop_event = threading.Event()
         self.buy_paused = False
+        self._closeout_day = ""
+        self._closeout_steps_done: set[str] = set()
         self._migrate_legacy_state()
         self._bind_commands()
 
@@ -157,7 +159,8 @@ class TradingApp:
             return f"매도 실패: {info.get('msg1', 'unknown')}"
         self.risk.register_trade_result(int(info.get("realized_pnl", 0)))
         self.risk.on_sell_filled(code, stop_loss=False)
-        return f"{code} {qty}주 매도 완료"
+        filled_qty = int(info.get("filled_qty", qty))
+        return f"{code} {filled_qty}주 매도 완료"
 
     def command_sellall(self) -> str:
         count = 0
@@ -206,6 +209,9 @@ class TradingApp:
                 if pre_t <= now.time() < open_t:
                     _ = self.signals.generate_buy_signals(self.market, premarket=True)
                 elif open_t <= now.time() < close_t and not self.buy_paused:
+                    if now.time() >= _parse_hhmm("15:15", "15:15"):
+                        time.sleep(interval)
+                        continue
                     signals = self.signals.generate_buy_signals(self.market, premarket=False)
                     for s in signals:
                         total, invested, cash = self._total_asset_snapshot()
@@ -214,6 +220,7 @@ class TradingApp:
                         if existing:
                             existing_amount = int(existing["qty"]) * int(s["price"])
                         qty = self.sizer.size_from_risk(total, self.settings.trade_risk_pct, s["price"], s["stop_price"])
+                        qty = int(qty * self.risk.buy_risk_multiplier(total))
                         qty = max(0, min(qty, int(self.settings.buy_max_amount // max(1, s["price"]))))
                         if qty <= 0:
                             continue
@@ -242,7 +249,12 @@ class TradingApp:
                         )
                         if ok:
                             self.risk.on_buy_filled(s["code"])
-                            self.notifier.send(f"매수 체결: {s['name']}({s['code']}) {qty}주 @ {s['price']}")
+                            filled_qty = int(payload.get("filled_qty", qty))
+                            fill_price = int(payload.get("fill_price", s["price"]))
+                            suffix = " (부분체결)" if payload.get("partial") else ""
+                            self.notifier.send(
+                                f"매수 체결{suffix}: {s['name']}({s['code']}) {filled_qty}주 @ {fill_price}"
+                            )
                         else:
                             self.notifier.send(f"매수 실패: {s['name']}({s['code']}) {payload.get('msg1', '')}")
                 else:
@@ -272,11 +284,16 @@ class TradingApp:
                     if not ok:
                         continue
                     realized = int(info.get("realized_pnl", 0))
+                    filled_qty = int(info.get("filled_qty", qty))
+                    fill_price = int(info.get("fill_price", price))
                     self.risk.register_trade_result(realized)
                     self.risk.on_sell_filled(p["code"], stop_loss=(action == "stop_loss"))
                     if action == "target1":
                         self.portfolio.mark_half_sold(p["code"])
-                    self.notifier.send(f"매도 체결[{action}]: {p['name']}({p['code']}) {qty}주 @ {price} / pnl {realized:+,}")
+                    suffix = " (부분체결)" if info.get("partial") else ""
+                    self.notifier.send(
+                        f"매도 체결[{action}]{suffix}: {p['name']}({p['code']}) {filled_qty}주 @ {fill_price} / pnl {realized:+,}"
+                    )
             except Exception as e:
                 self.breaker.record_api_error(str(e))
                 self.db.add_risk_event("position_loop_error", "high", str(e), {})
@@ -300,20 +317,63 @@ class TradingApp:
             try:
                 now = dt.datetime.now()
                 if now.weekday() < 5:
+                    today = now.strftime("%Y-%m-%d")
+                    if self._closeout_day != today:
+                        self._closeout_day = today
+                        self._closeout_steps_done.clear()
                     no_buy = _parse_hhmm("15:15", "15:15")
-                    check = _parse_hhmm("15:20", "15:20")
-                    end = _parse_hhmm("15:29", "15:29")
                     if now.time() >= no_buy:
                         self.buy_paused = True
-                    if check <= now.time() <= end:
+
+                    def _run_closeout_step(step_key: str, reason: str):
+                        if step_key in self._closeout_steps_done:
+                            return
+                        self._closeout_steps_done.add(step_key)
+                        sold = 0
                         for p in list(self.portfolio.list_positions()):
-                            price = _to_int(self.market_data.get_price_detail(p["code"], p["market"]).get("stck_prpr", p["avg_price"]), p["avg_price"])
-                            ok, info = self.order_manager.submit_sell(p["market"], p["code"], int(p["qty"]), price, "market_close")
+                            price = _to_int(
+                                self.market_data.get_price_detail(p["code"], p["market"]).get("stck_prpr", p["avg_price"]),
+                                p["avg_price"],
+                            )
+                            ok, info = self.order_manager.submit_sell(
+                                p["market"],
+                                p["code"],
+                                int(p["qty"]),
+                                price,
+                                reason,
+                            )
                             if ok:
+                                sold += 1
                                 self.risk.register_trade_result(int(info.get("realized_pnl", 0)))
                                 self.risk.on_sell_filled(p["code"], stop_loss=False)
-                        self.notifier.send("장마감 강제 정리 완료")
-                        time.sleep(70)
+                        remain = len(self.portfolio.list_positions())
+                        self.notifier.send(f"장마감 정리[{step_key}] 완료: 매도 {sold}종목 / 잔여 {remain}종목")
+                        if remain > 0:
+                            self.db.add_risk_event(
+                                "closeout_pending",
+                                "warn",
+                                f"{step_key} 이후 미정리 잔량 존재",
+                                {"remaining_count": remain},
+                            )
+
+                    hhmm = now.strftime("%H:%M")
+                    if hhmm == "15:20":
+                        _run_closeout_step("15:20", "market_close_1")
+                    elif hhmm == "15:24":
+                        _run_closeout_step("15:24", "market_close_2")
+                    elif hhmm == "15:28":
+                        _run_closeout_step("15:28", "market_close_3")
+                    elif hhmm == "15:29" and "15:29" not in self._closeout_steps_done:
+                        self._closeout_steps_done.add("15:29")
+                        remain = len(self.portfolio.list_positions())
+                        if remain > 0:
+                            self.notifier.send(f"긴급: 장마감 직전 미체결/잔량 {remain}종목")
+                            self.db.add_risk_event(
+                                "closeout_emergency",
+                                "high",
+                                "15:29 기준 미정리 포지션 존재",
+                                {"remaining_count": remain},
+                            )
             except Exception as e:
                 self.db.add_risk_event("closeout_loop_error", "warn", str(e), {})
             time.sleep(2)

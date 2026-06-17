@@ -56,3 +56,6 @@ class KISClient:
 
     def today_realized_pnl(self, market: str) -> int:
         return int(self.api.get_today_realized_pnl_by_market(market) or 0)
+
+    def order_fills(self, order_id: str, market: str) -> dict[str, Any]:
+        return self.api.get_order_fills_by_market(str(order_id or ""), market) or {}
