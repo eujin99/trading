@@ -1,16 +1,18 @@
 # ============================================================
-# autotrader.py — 급등주 자동매매 메인 봇
+# autotrader.py — 급등주 자동매매 메인 봇 (v2 위임 래퍼)
 # ============================================================
-#
-# 실행 방법:
-#   python autotrader.py
-#
-# 구조:
-#   1. 메뉴에서 스크리닝 실행
-#   2. 메뉴에서 매수 실행 (최근 스크리닝 결과 사용 가능)
-#   3. 메뉴에서 보유 종목 점검 및 조건 매도 실행
-#   4. 필요 시 메뉴에서 전량 강제 매도
-# ============================================================
+# 기본 실행은 새 오케스트레이터(app.py)로 위임합니다.
+# 기존 코드 블록은 하위호환 참조를 위해 파일 내에 남겨둡니다.
+# ------------------------------------------------------------
+if __name__ == "__main__":
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    cmd = [sys.executable, str(root / "app.py"), "--config-module", os.getenv("TRADER_CONFIG_MODULE", "config")]
+    raise SystemExit(subprocess.call(cmd, cwd=str(root)))
 
 import time
 import datetime
