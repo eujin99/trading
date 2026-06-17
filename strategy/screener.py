@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import re
 
 from config import Settings
@@ -37,6 +38,26 @@ class Screener:
         except Exception:
             return default
 
+    def _compute_trend_score(
+        self,
+        *,
+        price: int,
+        open_price: int,
+        high_price: int,
+        low_price: int,
+        vwap_price: float,
+        change_rate: float,
+    ) -> float:
+        day_range = max(1, high_price - low_price)
+        range_pos = ((price - low_price) / day_range) * 100.0
+        body_strength = (abs(price - open_price) / day_range) * 100.0
+        upper_wick_ratio = (high_price - max(price, open_price)) / day_range
+        wick_penalty = max(0.0, upper_wick_ratio * 40.0)
+        vwap_bonus = 12.0 if price >= int(vwap_price) else -20.0
+        change_bonus = max(-10.0, min(20.0, change_rate * 1.5))
+        raw = (range_pos * 0.55) + (body_strength * 0.25) + change_bonus + vwap_bonus - wick_penalty
+        return max(0.0, min(100.0, raw))
+
     def collect_candidates(self, market: str, premarket: bool = False) -> list[dict]:
         raw = self.market_data.get_candidates(market)
         result: list[dict] = []
@@ -73,15 +94,19 @@ class Screener:
             open_price = self._to_int(detail.get("stck_oprc", price), price)
             high_price = self._to_int(detail.get("stck_hgpr", price), price)
             low_price = self._to_int(detail.get("stck_lwpr", price), price)
-            day_range = max(1, high_price - low_price)
-            range_pos = ((price - low_price) / day_range) * 100.0
-            trend_score = max(0.0, min(100.0, range_pos if price >= open_price else range_pos * 0.6))
-            if trend_score < self.settings.min_trend_score:
-                continue
-
             vwap_price = self._to_float(detail.get("wghn_avrg_stck_prc", 0.0), 0.0)
             if vwap_price <= 0:
                 vwap_price = float(open_price)
+            trend_score = self._compute_trend_score(
+                price=price,
+                open_price=open_price,
+                high_price=high_price,
+                low_price=low_price,
+                vwap_price=vwap_price,
+                change_rate=change_rate,
+            )
+            if trend_score < self.settings.min_trend_score:
+                continue
             vwap_gap = (price - vwap_price) / max(1.0, vwap_price)
             if self.settings.require_price_above_vwap and vwap_gap < 0:
                 continue
@@ -102,7 +127,6 @@ class Screener:
                     "spread_pct": spread_pct,
                     "trend_score": trend_score,
                     "vwap_gap": vwap_gap,
-                    "market_score": 60.0,
                     "detail": detail,
                 }
             )
@@ -114,10 +138,32 @@ class Screener:
         if not candidates:
             return ranked
 
-        # 시장점수(브레드스/평균 상승률 기반) 동적 계산
+        # 시장점수(브레드스/평균 상승률/변동성/시간대) 동적 계산
         avg_change = sum(float(c.get("change_rate", 0.0)) for c in candidates) / max(1, len(candidates))
         positive_ratio = sum(1 for c in candidates if float(c.get("change_rate", 0.0)) > 0) / max(1, len(candidates))
-        base_market_score = max(0.0, min(100.0, 45.0 + avg_change * 3.0 + positive_ratio * 35.0))
+        avg_turnover = sum(float(c.get("vol_tnrt", 0.0)) for c in candidates) / max(1, len(candidates))
+        variance = (
+            sum((float(c.get("change_rate", 0.0)) - avg_change) ** 2 for c in candidates)
+            / max(1, len(candidates))
+        )
+        volatility = variance**0.5
+        now = dt.datetime.now().time()
+        time_bonus = 0.0
+        if dt.time(9, 0) <= now <= dt.time(10, 30):
+            time_bonus = 6.0
+        elif dt.time(11, 20) <= now <= dt.time(13, 10):
+            time_bonus = -6.0
+        elif dt.time(14, 0) <= now <= dt.time(15, 0):
+            time_bonus = 2.0
+        base_market_score = (
+            40.0
+            + (avg_change * 2.8)
+            + (positive_ratio * 30.0)
+            + min(12.0, avg_turnover / 20.0)
+            - min(10.0, volatility * 1.4)
+            + time_bonus
+        )
+        base_market_score = max(0.0, min(100.0, base_market_score))
 
         for c in candidates:
             own_change = float(c.get("change_rate", 0.0))

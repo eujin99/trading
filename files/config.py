@@ -99,6 +99,11 @@ MAX_TOTAL_INVEST_PCT = 0.65          # 총 투자 비중 상한
 REENTRY_PER_DAY = 1                  # 동일 종목 재진입 제한
 API_ERROR_LIMIT = 3                  # API 오류 누적 제한
 ORDER_FAIL_LIMIT = 2                 # 주문 실패 누적 제한
+FEE_RATE = 0.00015                   # 수수료율(왕복 계산에 사용)
+SELL_TAX_RATE = 0.0018               # 매도세율(국내)
+PARTIAL_RETRY_MAX = 1                # 부분체결 잔량 재시도 횟수(매도)
+PARTIAL_RETRY_SLEEP_SEC = 0.7        # 부분체결 재시도 간격(초)
+BUY_PARTIAL_RETRY_MAX = 0            # 매수 부분체결 잔량 재시도(기본 비활성)
 
 # ── 스크리닝 하드필터(v2) ─────────────────────────────────
 MAX_SPREAD_PCT = 0.8                 # 스프레드 상한(%)

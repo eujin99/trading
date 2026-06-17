@@ -56,6 +56,7 @@ class TradingApp:
             sell_tax_rate=self.settings.sell_tax_rate,
             partial_retry_max=self.settings.partial_retry_max,
             partial_retry_sleep_sec=self.settings.partial_retry_sleep_sec,
+            buy_partial_retry_max=self.settings.buy_partial_retry_max,
         )
         self.account_sync = AccountSyncService(self.client, self.portfolio, self.db)
         self.notifier = TelegramNotifier(self.settings)

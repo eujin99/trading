@@ -87,6 +87,7 @@ class Settings:
     sell_tax_rate: float = 0.0018
     partial_retry_max: int = 1
     partial_retry_sleep_sec: float = 0.7
+    buy_partial_retry_max: int = 0
     max_spread_pct: float = 0.8
     min_trend_score: float = 55.0
     max_gap_up_pct: float = 8.0
@@ -167,6 +168,7 @@ def load_settings(module_name: str | None = None) -> Settings:
         sell_tax_rate=_as_float(getattr(module, "SELL_TAX_RATE", 0.0018), 0.0018),
         partial_retry_max=_as_int(getattr(module, "PARTIAL_RETRY_MAX", 1), 1),
         partial_retry_sleep_sec=_as_float(getattr(module, "PARTIAL_RETRY_SLEEP_SEC", 0.7), 0.7),
+        buy_partial_retry_max=_as_int(getattr(module, "BUY_PARTIAL_RETRY_MAX", 0), 0),
         dca_enabled=_as_bool(getattr(module, "DCA_ENABLED", False), False),
         api_error_limit=_as_int(getattr(module, "API_ERROR_LIMIT", 3), 3),
         order_fail_limit=_as_int(getattr(module, "ORDER_FAIL_LIMIT", 2), 2),
